@@ -412,3 +412,145 @@ extern "C" {
     }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////
+
+TIM2PWM::TIM2PWM(Channel channel, uint8_t freq_selector) {
+    selected_channel = channel;
+    calculateTiming(freq_selector);
+}
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+void TIM2PWM::begin() {
+    RCC->APB2PCENR |= RCC_APB2Periph_GPIOD;
+    RCC->APB1PCENR |= RCC_APB1Periph_TIM2;
+
+    if (selected_channel == T2CH3) {
+        RCC->APB2PCENR |= RCC_APB2Periph_GPIOC;
+    }
+
+    switch (selected_channel) {
+        case T2CH2:
+            GPIOD->CFGLR &= ~(0xf << (4*3));
+            GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4*3);
+            break;
+        case T2CH3:
+            GPIOC->CFGLR &= ~(0xf << (4*0));
+            GPIOC->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4*0);
+            break;
+        case T2CH4:
+            GPIOD->CFGLR &= ~(0xf << (4*7));
+            GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4*7);
+            break;
+    }
+
+    RCC->APB1PRSTR |= RCC_APB1Periph_TIM2;
+    RCC->APB1PRSTR &= ~RCC_APB1Periph_TIM2;
+
+    TIM2->PSC = psc;
+    TIM2->ATRLR = arr;
+
+    switch (selected_channel) {
+        case T2CH2:
+            TIM2->CHCTLR1 |= TIM_OC2M_2 | TIM_OC2M_1 | TIM_OC2PE;
+            TIM2->CCER |= TIM_CC2E;
+            break;
+        case T2CH3:
+            TIM2->CHCTLR2 |= TIM_OC3M_2 | TIM_OC3M_1 | TIM_OC3PE;
+            TIM2->CCER |= TIM_CC3E;
+            break;
+        case T2CH4:
+            TIM2->CHCTLR2 |= TIM_OC4M_2 | TIM_OC4M_1 | TIM_OC4PE;
+            TIM2->CCER |= TIM_CC4E;
+            break;
+    }
+
+    TIM2->CTLR1 |= TIM_ARPE;
+    TIM2->SWEVGR |= TIM_UG;
+    TIM2->CTLR1 |= TIM_CEN;
+}
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+void TIM2PWM::setDutyCycle(uint8_t duty_percent) {
+    if (duty_percent > 100) duty_percent = 100;
+    uint16_t width = (duty_percent * arr) / 100;
+
+    switch (selected_channel) {
+        case T2CH2:
+            TIM2->CH2CVR = width;
+            break;
+        case T2CH3:
+            TIM2->CH3CVR = width;
+            break;
+        case T2CH4:
+            TIM2->CH4CVR = width;
+            break;
+    }
+    TIM2->SWEVGR |= TIM_UG;
+}
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+void TIM2PWM::setFrequency(uint8_t freq_selector) {
+    if (freq_selector > 0x15) freq_selector = 0x15;
+    calculateTiming(freq_selector);
+    TIM2->PSC = psc;
+    TIM2->ATRLR = arr;
+    TIM2->SWEVGR |= TIM_UG;
+}
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+void TIM2PWM::calculateTiming(uint8_t freq_selector) {
+    uint32_t clock = FUNCONF_SYSTEM_CORE_CLOCK; // 48 MHz por padrão
+    uint32_t target_freq;
+
+    // Define a frequência alvo com base no seletor
+    switch (freq_selector) {
+        case 0x00: target_freq = 100; break;     // 100 Hz
+        case 0x01: target_freq = 500; break;     // 500 Hz
+        case 0x02: target_freq = 1000; break;    // 1 kHz
+        case 0x03: target_freq = 2000; break;    // 2 kHz
+        case 0x04: target_freq = 3000; break;    // 3 kHz
+        case 0x05: target_freq = 4000; break;    // 4 kHz
+        case 0x06: target_freq = 5000; break;    // 5 kHz
+        case 0x07: target_freq = 10000; break;   // 10 kHz
+        case 0x08: target_freq = 15000; break;   // 15 kHz
+        case 0x09: target_freq = 20000; break;   // 20 kHz
+        case 0x0A: target_freq = 25000; break;   // 25 kHz
+        case 0x0B: target_freq = 30000; break;   // 30 kHz
+        case 0x0C: target_freq = 40000; break;   // 40 kHz
+        case 0x0D: target_freq = 50000; break;   // 50 kHz
+        case 0x0E: target_freq = 75000; break;   // 75 kHz
+        case 0x0F: target_freq = 100000; break;  // 100 kHz
+        case 0x10: target_freq = 100; break;     // 100 Hz (repetição para preencher)
+        case 0x11: target_freq = 500; break;     // 500 Hz
+        case 0x12: target_freq = 1000; break;    // 1 kHz
+        case 0x13: target_freq = 2000; break;    // 2 kHz
+        case 0x14: target_freq = 3000; break;    // 3 kHz
+        case 0x15: target_freq = 4000; break;    // 4 kHz
+        default: target_freq = 100; break;       // Padrão: 100 Hz
+    }
+
+    // Calcula PSC e ARR: Frequência = clock / ((PSC + 1) * (ARR + 1))
+    // Garante que ARR >= 100
+    uint32_t min_arr = 100; // Mínimo permitido para ARR
+    uint32_t max_arr = 65535; // Máximo permitido (16 bits)
+
+    // Calcula PSC para manter ARR >= 100
+    uint32_t psc_temp = (clock / (target_freq * (min_arr + 1))) - 1;
+
+    if (psc_temp <= 65535) {
+        // Se PSC é válido, tenta aumentar ARR para melhor resolução
+        for (uint32_t arr_temp = min_arr; arr_temp <= max_arr; arr_temp++) {
+            psc_temp = (clock / (target_freq * (arr_temp + 1))) - 1;
+            if (psc_temp <= 65535) {
+                psc = psc_temp;
+                arr = arr_temp;
+                return;
+            }
+        }
+    } else {
+        // Se PSC inicial é muito grande, ajusta ARR para o máximo e recalcula PSC
+        arr = max_arr;
+        psc = (clock / (target_freq * (arr + 1))) - 1;
+        if (psc > 65535) psc = 65535; // Limita ao máximo
+    }
+}
+///////////////////////////////////////////////////////////////////////////////////////////////
