@@ -1,5 +1,6 @@
 #include <ch32v003fun.h>
 #include <stdio.h>
+#include <easyCH32.h>
 
 int main() {
     SystemInit(); // Inicializa o sistema
